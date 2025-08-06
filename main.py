@@ -19,18 +19,16 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "logs.db")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(bot)
 
-# --- Асинхронная очередь для сообщений ---
 message_queue = asyncio.Queue()
 
 async def message_worker():
     while True:
         chat_id, msg = await message_queue.get()
         try:
-            await bot.send_message(chat_id, msg, parse_mode="HTML")
+            await bot.send_message(chat_id, msg)
         except Exception as e:
             print(f"Ошибка при отправке: {e}")
 
-# --- Работа с базой данных ---
 def get_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -250,17 +248,20 @@ def send_summary():
     except Exception as e:
         print(f"Ошибка при отправке summary: {e}")
 
-# --- Telegram команды ---
+# --- Явный парсинг аргументов ---
+def parse_args(text):
+    # Возвращает строку после первой команды
+    if not text:
+        return ""
+    parts = text.strip().split(" ", 1)
+    return parts[1].strip() if len(parts) > 1 else ""
+
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
-    print("[DEBUG] /start handler triggered")
-    try:
-        await message.answer(
-            "👋 Бот мониторинга трафика 3x-ui.\n"
-            "Доступные команды: /domains, /adddomain, /removedomain, /cleardomains, /alerts, /summary, /status"
-        )
-    except Exception as e:
-        print(f"[ERROR] Ошибка отправки сообщения: {e}")
+    await message.answer(
+        "👋 Бот мониторинга трафика 3x-ui.\n"
+        "Доступные команды: /domains, /adddomain, /removedomain, /cleardomains, /alerts, /summary, /status"
+    )
 
 @dp.message_handler(commands=['domains'])
 async def cmd_domains(message: types.Message):
@@ -273,7 +274,7 @@ async def cmd_domains(message: types.Message):
 
 @dp.message_handler(commands=['adddomain'])
 async def cmd_adddomain(message: types.Message):
-    args = message.get_args().strip()
+    args = parse_args(message.text)
     if not args:
         await message.answer("Использование: /adddomain <домен>")
         return
@@ -284,7 +285,7 @@ async def cmd_adddomain(message: types.Message):
 
 @dp.message_handler(commands=['removedomain'])
 async def cmd_removedomain(message: types.Message):
-    args = message.get_args().strip()
+    args = parse_args(message.text)
     if not args:
         await message.answer("Использование: /removedomain <домен>")
         return
@@ -298,7 +299,7 @@ async def cmd_cleardomains(message: types.Message):
 
 @dp.message_handler(commands=['alerts'])
 async def cmd_alerts(message: types.Message):
-    args = message.get_args().strip().lower()
+    args = parse_args(message.text).lower()
     if args == "on":
         set_setting("alerts_on", "1")
         await message.answer("Алерты включены.")
