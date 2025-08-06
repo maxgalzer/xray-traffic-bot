@@ -6,7 +6,7 @@ import threading
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, executor
-import asyncio  # <--- Важно!
+import asyncio
 
 # --- Загрузка настроек из .env ---
 load_dotenv()
@@ -18,6 +18,17 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "logs.db")
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(bot)
+
+# --- Асинхронная очередь для сообщений ---
+message_queue = asyncio.Queue()
+
+async def message_worker():
+    while True:
+        chat_id, msg = await message_queue.get()
+        try:
+            await bot.send_message(chat_id, msg)
+        except Exception as e:
+            print(f"Ошибка при отправке: {e}")
 
 # --- Работа с базой данных ---
 def get_db():
@@ -103,7 +114,7 @@ def get_domains():
 
 # --- Парсинг access.log ---
 def parse_log_line(line):
-    # 2025/08/06 15:54:22.272696 from 5.167.225.135:62124 accepted tcp:speed.cloudflare.com:443 [inbound-16880 >> direct] email: 7p5uebch
+    # 2025/08/06 15:54:22.272696 from 5.167.225.135:62124 accepted tcp:sponsor.ajay.app:443 [inbound-51556 >> direct] email: wcxg41x1
     pattern = re.compile(
         r"(?P<log_time>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?).*?from (?P<client_ip>[0-9\.]+):(?P<client_port>\d+).*?accepted (?P<protocol>tcp|udp):(?P<domain>[^\s]+).*?\[(?P<inbound>[^\s\]]+)",
         re.IGNORECASE)
@@ -139,7 +150,6 @@ def tail_log():
         with open(ACCESS_LOG, "r") as f:
             f.seek(0, 2)  # В конец файла
             while True:
-                pos = f.tell()
                 line = f.readline()
                 if not line:
                     time.sleep(1)
@@ -160,8 +170,9 @@ def tail_log():
                 alerts_on = get_setting("alerts_on", "1")
                 if alerts_on == "1":
                     for dom in domains:
-                        # Точное совпадение домена или поддомен
-                        if dom and (dom in data["domain"] or data["domain"] in dom):
+                        # Гибкое сравнение (совпадение домена или поддомена)
+                        if dom and (data["domain"] == dom or data["domain"].endswith("." + dom) or dom in data["domain"]):
+                            print(f"[ALERT] {data['domain']} совпал с {dom}")
                             send_alert(data)
                             break
     except Exception as e:
@@ -169,7 +180,7 @@ def tail_log():
     finally:
         conn.close()
 
-# --- Алерт в Telegram ---
+# --- Алерт в Telegram (через очередь) ---
 def send_alert(data):
     msg = (
         f"🚨 Домен в списке!\n"
@@ -180,14 +191,13 @@ def send_alert(data):
         f"Домен: {data['domain']}"
     )
     try:
-        asyncio.run(bot.send_message(CHAT_ID, msg))
+        message_queue.put_nowait((CHAT_ID, msg))
     except Exception as e:
         print(f"Ошибка при отправке алерта: {e}")
 
 # --- Вспомогательная функция: перевод времени в UTC ---
 def convert_to_utc(dt_str):
     try:
-        # 2025/08/06 15:54:22.272696
         dt = datetime.strptime(dt_str.split(".")[0], "%Y/%m/%d %H:%M:%S")
         return dt.replace(tzinfo=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     except Exception:
@@ -226,12 +236,11 @@ def send_summary():
     if not rows:
         msg = "⏱️ Сводка за последние {} часов\nНет активности.".format(hours)
         try:
-            asyncio.run(bot.send_message(CHAT_ID, msg))
+            message_queue.put_nowait((CHAT_ID, msg))
         except Exception as e:
             print(f"Ошибка при отправке summary: {e}")
         return
 
-    # Формируем удобный текст
     summary = {}
     for row in rows:
         key = f"{row['client_email']} ({row['inbound']})"
@@ -244,7 +253,7 @@ def send_summary():
         msg += f"Клиент: {user}\n"
         msg += "\n".join(doms) + "\n\n"
     try:
-        asyncio.run(bot.send_message(CHAT_ID, msg))
+        message_queue.put_nowait((CHAT_ID, msg))
     except Exception as e:
         print(f"Ошибка при отправке summary: {e}")
 
@@ -318,6 +327,8 @@ def main():
     init_db()
     threading.Thread(target=tail_log, daemon=True).start()
     threading.Thread(target=summary_loop, daemon=True).start()
+    loop = asyncio.get_event_loop()
+    loop.create_task(message_worker())
     executor.start_polling(dp, skip_updates=True)
 
 if __name__ == "__main__":
