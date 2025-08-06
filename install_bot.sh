@@ -41,7 +41,7 @@ pip3 install -r requirements.txt
 # 📜 Скачиваем bot.py
 curl -s -o bot.py https://raw.githubusercontent.com/maxgalzer/xray-traffic-bot/main/bot.py
 
-# 🧠 Сводка по крону
+# 🧠 Сводка по крону (с фиксом — создаёт таблицу logs)
 cat > summary_cron.py <<'EOF'
 import os
 import sqlite3
@@ -55,6 +55,17 @@ CHAT_ID = os.getenv("CHAT_ID")
 
 conn = sqlite3.connect("/opt/xray-traffic-bot/db/traffic.db", isolation_level=None)
 cursor = conn.cursor()
+
+# 🛡️ Гарантируем, что таблица logs существует
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT,
+    inbound TEXT,
+    client TEXT,
+    domain TEXT
+)
+""")
 
 now = datetime.utcnow()
 since = now - timedelta(hours=6)
