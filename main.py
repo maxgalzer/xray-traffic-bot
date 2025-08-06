@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, executor
+import asyncio  # <--- Важно!
 
 # --- Загрузка настроек из .env ---
 load_dotenv()
@@ -134,8 +135,6 @@ def parse_log_line(line):
 def tail_log():
     conn = get_db()
     c = conn.cursor()
-    # Получаем последнее время и строку
-    last_id = get_setting("last_log_id", 0)
     try:
         with open(ACCESS_LOG, "r") as f:
             f.seek(0, 2)  # В конец файла
@@ -181,7 +180,7 @@ def send_alert(data):
         f"Домен: {data['domain']}"
     )
     try:
-        bot.loop.create_task(bot.send_message(CHAT_ID, msg))
+        asyncio.run(bot.send_message(CHAT_ID, msg))
     except Exception as e:
         print(f"Ошибка при отправке алерта: {e}")
 
@@ -214,7 +213,6 @@ def parse_interval(interval):
 def send_summary():
     conn = get_db()
     c = conn.cursor()
-    # Сводка только за последние N часов
     hours = int(float(SUMMARY_INTERVAL.strip("hm")))
     c.execute('''
         SELECT client_email, inbound, domain, COUNT(*) as cnt
@@ -227,7 +225,10 @@ def send_summary():
     rows = c.fetchall()
     if not rows:
         msg = "⏱️ Сводка за последние {} часов\nНет активности.".format(hours)
-        bot.loop.create_task(bot.send_message(CHAT_ID, msg))
+        try:
+            asyncio.run(bot.send_message(CHAT_ID, msg))
+        except Exception as e:
+            print(f"Ошибка при отправке summary: {e}")
         return
 
     # Формируем удобный текст
@@ -242,7 +243,10 @@ def send_summary():
     for user, doms in summary.items():
         msg += f"Клиент: {user}\n"
         msg += "\n".join(doms) + "\n\n"
-    bot.loop.create_task(bot.send_message(CHAT_ID, msg))
+    try:
+        asyncio.run(bot.send_message(CHAT_ID, msg))
+    except Exception as e:
+        print(f"Ошибка при отправке summary: {e}")
 
 # --- Telegram команды ---
 @dp.message_handler(commands=['start'])
