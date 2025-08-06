@@ -41,7 +41,7 @@ pip3 install -r requirements.txt
 # 📜 Скачиваем bot.py
 curl -s -o bot.py https://raw.githubusercontent.com/maxgalzer/xray-traffic-bot/main/bot.py
 
-# 🧠 Сводка по крону (с фиксом — создаёт таблицу logs)
+# 🧠 Сводка по крону с гарантированным созданием всех таблиц
 cat > summary_cron.py <<'EOF'
 import os
 import sqlite3
@@ -56,7 +56,7 @@ CHAT_ID = os.getenv("CHAT_ID")
 conn = sqlite3.connect("/opt/xray-traffic-bot/db/traffic.db", isolation_level=None)
 cursor = conn.cursor()
 
-# 🛡️ Гарантируем, что таблица logs существует
+# 🛡️ Гарантируем, что все таблицы существуют
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS logs (
     inbound TEXT,
     client TEXT,
     domain TEXT
+)
+""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS alert_domains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    domain TEXT UNIQUE
+)
+""")
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
 )
 """)
 
