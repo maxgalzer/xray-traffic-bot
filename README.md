@@ -9,7 +9,7 @@
 Выполните команду:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/ВАШ_ЮЗЕР/xray-traffic-bot/main/install_bot.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/maxgalzer/xray-traffic-bot/main/install_bot.sh)
 ```
 Скрипт:
 
