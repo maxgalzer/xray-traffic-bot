@@ -121,7 +121,6 @@ def get_domains():
 
 # --- Парсинг access.log ---
 def parse_log_line(line):
-    # 2025/08/06 15:54:22.272696 from 5.167.225.135:62124 accepted tcp:sponsor.ajay.app:443 [inbound-51556 >> direct] email: wcxg41x1
     pattern = re.compile(
         r"(?P<log_time>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?).*?from (?P<client_ip>[0-9\.]+):(?P<client_port>\d+).*?accepted (?P<protocol>tcp|udp):(?P<domain>[^\s]+).*?\[(?P<inbound>[^\s\]]+)",
         re.IGNORECASE)
@@ -177,7 +176,6 @@ def tail_log():
                 alerts_on = get_setting("alerts_on", "1")
                 if alerts_on == "1":
                     for dom in domains:
-                        # Гибкое сравнение (совпадение домена или поддомена)
                         if dom and (data["domain"] == dom or data["domain"].endswith("." + dom) or dom in data["domain"]):
                             print(f"[ALERT] {data['domain']} совпал с {dom}")
                             send_alert(data)
@@ -266,6 +264,7 @@ def send_summary():
 # --- Telegram команды ---
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
+    print("[DEBUG] /start handler triggered")  # Диагностика!
     text = (
         "👋 <b>Бот мониторинга трафика 3x-ui</b>\n\n"
         "💡 <b>Доступные команды:</b>\n"
