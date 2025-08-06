@@ -19,16 +19,18 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "logs.db")
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher(bot)
 
+# --- Асинхронная очередь для сообщений ---
 message_queue = asyncio.Queue()
 
 async def message_worker():
     while True:
         chat_id, msg = await message_queue.get()
         try:
-            await bot.send_message(chat_id, msg)
+            await bot.send_message(chat_id, msg, parse_mode="HTML")
         except Exception as e:
             print(f"Ошибка при отправке: {e}")
 
+# --- Работа с базой данных ---
 def get_db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -61,10 +63,12 @@ def init_db():
             value TEXT
         )
     ''')
+    # alerts_on по умолчанию вкл
     c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('alerts_on', '1')")
     conn.commit()
     conn.close()
 
+# --- Утилиты для работы с settings ---
 def set_setting(key, value):
     conn = get_db()
     c = conn.cursor()
@@ -80,6 +84,7 @@ def get_setting(key, default=None):
     conn.close()
     return row["value"] if row else default
 
+# --- Работа со списком доменов ---
 def add_domain(domain):
     conn = get_db()
     c = conn.cursor()
@@ -114,7 +119,9 @@ def get_domains():
     conn.close()
     return domains
 
+# --- Парсинг access.log ---
 def parse_log_line(line):
+    # 2025/08/06 15:54:22.272696 from 5.167.225.135:62124 accepted tcp:sponsor.ajay.app:443 [inbound-51556 >> direct] email: wcxg41x1
     pattern = re.compile(
         r"(?P<log_time>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?).*?from (?P<client_ip>[0-9\.]+):(?P<client_port>\d+).*?accepted (?P<protocol>tcp|udp):(?P<domain>[^\s]+).*?\[(?P<inbound>[^\s\]]+)",
         re.IGNORECASE)
@@ -142,12 +149,13 @@ def parse_log_line(line):
         }
     return None
 
+# --- Инкрементальный парсер логов ---
 def tail_log():
     conn = get_db()
     c = conn.cursor()
     try:
         with open(ACCESS_LOG, "r") as f:
-            f.seek(0, 2)
+            f.seek(0, 2)  # В конец файла
             while True:
                 line = f.readline()
                 if not line:
@@ -156,16 +164,20 @@ def tail_log():
                 data = parse_log_line(line)
                 if not data:
                     continue
+                # Пропускаем 127.0.0.1 и внутренние обращения
                 if data["client_ip"] == "127.0.0.1":
                     continue
+                # Сохраняем в БД
                 c.execute('''INSERT INTO logs (log_time, client_ip, client_port, domain, protocol, inbound, client_email)
                              VALUES (?, ?, ?, ?, ?, ?, ?)''',
                           (data["log_time"], data["client_ip"], data["client_port"], data["domain"], data["protocol"], data["inbound"], data["client_email"]))
                 conn.commit()
+                # Алерт если домен в списке
                 domains = get_domains()
                 alerts_on = get_setting("alerts_on", "1")
                 if alerts_on == "1":
                     for dom in domains:
+                        # Гибкое сравнение (совпадение домена или поддомена)
                         if dom and (data["domain"] == dom or data["domain"].endswith("." + dom) or dom in data["domain"]):
                             print(f"[ALERT] {data['domain']} совпал с {dom}")
                             send_alert(data)
@@ -175,19 +187,21 @@ def tail_log():
     finally:
         conn.close()
 
+# --- Алерт в Telegram (через очередь) ---
 def send_alert(data):
     msg = (
-        f"🚨 ВНИМАНИЕ: посещён отслеживаемый домен!\n"
-        f"Клиент: {data['client_email']} ({data['client_ip']}:{data['client_port']})\n"
-        f"Домен: {data['domain']}\n"
-        f"Инбаунд: {data['inbound']}\n"
-        f"Время (UTC): {convert_to_utc(data['log_time'])}"
+        f"🚨 <b>ВНИМАНИЕ: посещён отслеживаемый домен!</b>\n"
+        f"<b>👤 Клиент:</b> <code>{data['client_email']}</code> (<code>{data['client_ip']}:{data['client_port']}</code>)\n"
+        f"<b>🌐 Домен:</b> <code>{data['domain']}</code>\n"
+        f"<b>📥 Инбаунд:</b> <code>{data['inbound']}</code>\n"
+        f"<b>🕒 Время (UTC):</b> <code>{convert_to_utc(data['log_time'])}</code>"
     )
     try:
         message_queue.put_nowait((CHAT_ID, msg))
     except Exception as e:
         print(f"Ошибка при отправке алерта: {e}")
 
+# --- Вспомогательная функция: перевод времени в UTC ---
 def convert_to_utc(dt_str):
     try:
         dt = datetime.strptime(dt_str.split(".")[0], "%Y/%m/%d %H:%M:%S")
@@ -195,6 +209,7 @@ def convert_to_utc(dt_str):
     except Exception:
         return dt_str
 
+# --- Сводка по расписанию ---
 def summary_loop():
     interval_sec = parse_interval(SUMMARY_INTERVAL)
     while True:
@@ -209,7 +224,7 @@ def parse_interval(interval):
     elif interval.endswith("d"):
         return int(interval[:-1]) * 86400
     else:
-        return 21600
+        return 21600  # 6 часов по умолчанию
 
 def send_summary():
     conn = get_db()
@@ -225,7 +240,7 @@ def send_summary():
     '''.format(hours))
     rows = c.fetchall()
     if not rows:
-        msg = f"Сводка за последние {hours} часов\n\nНет активности пользователей."
+        msg = f"⏱️ <b>Сводка за последние {hours} часов</b>\n\nНет активности пользователей."
         try:
             message_queue.put_nowait((CHAT_ID, msg))
         except Exception as e:
@@ -237,95 +252,97 @@ def send_summary():
         key = f"{row['client_email']} ({row['inbound']})"
         if key not in summary:
             summary[key] = []
-        summary[key].append(f"   {row['domain']} — {row['cnt']} раз(а)")
+        summary[key].append(f"   <b>🌐 {row['domain']}</b> — <i>{row['cnt']} раз(а)</i>")
 
-    msg = f"Сводка за последние {hours} часов\n\n"
+    msg = f"⏱️ <b>Сводка за последние {hours} часов</b>\n\n"
     for user, doms in summary.items():
-        msg += f"{user}\n"
+        msg += f"👤 <b>{user}</b>\n"
         msg += "\n".join(doms) + "\n\n"
     try:
         message_queue.put_nowait((CHAT_ID, msg))
     except Exception as e:
         print(f"Ошибка при отправке summary: {e}")
 
-# --- Явный парсинг аргументов ---
-def parse_args(text):
-    # Возвращает строку после первой команды
-    if not text:
-        return ""
-    parts = text.strip().split(" ", 1)
-    return parts[1].strip() if len(parts) > 1 else ""
-
+# --- Telegram команды ---
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message):
-    await message.answer(
-        "👋 Бот мониторинга трафика 3x-ui.\n"
-        "Доступные команды: /domains, /adddomain, /removedomain, /cleardomains, /alerts, /summary, /status"
+    text = (
+        "👋 <b>Бот мониторинга трафика 3x-ui</b>\n\n"
+        "💡 <b>Доступные команды:</b>\n"
+        " • /domains — показать список отслеживаемых доменов\n"
+        " • /adddomain <домен> — добавить домен в отслеживание\n"
+        " • /removedomain <домен> — удалить домен из отслеживания\n"
+        " • /cleardomains — удалить <b>ВСЕ</b> домены из отслеживания\n"
+        " • /alerts on|off — включить/выключить алерты\n"
+        " • /summary — отправить сводку за период\n"
+        " • /status — показать статус бота\n"
     )
+    await message.answer(text, parse_mode="HTML")
 
 @dp.message_handler(commands=['domains'])
 async def cmd_domains(message: types.Message):
     domains = get_domains()
     if not domains:
-        await message.answer("Список отслеживаемых доменов пуст.")
+        await message.answer("ℹ️ <b>Список отслеживаемых доменов пуст.</b>", parse_mode="HTML")
     else:
-        msg = "Текущие отслеживаемые домены:\n" + "\n".join([f"• {d}" for d in domains])
-        await message.answer(msg)
+        msg = "📋 <b>Текущие отслеживаемые домены:</b>\n" + "\n".join([f"• <code>{d}</code>" for d in domains])
+        await message.answer(msg, parse_mode="HTML")
 
 @dp.message_handler(commands=['adddomain'])
 async def cmd_adddomain(message: types.Message):
-    args = parse_args(message.text)
+    args = message.get_args().strip()
     if not args:
-        await message.answer("Использование: /adddomain <домен>")
+        await message.answer("✏️ <b>Использование:</b> /adddomain <домен>", parse_mode="HTML")
         return
     if add_domain(args):
-        await message.answer(f"Домен {args} добавлен в отслеживаемые!")
+        await message.answer(f"✅ <b>Домен <code>{args}</code> добавлен в отслеживаемые!</b>", parse_mode="HTML")
     else:
-        await message.answer("Ошибка при добавлении домена.")
+        await message.answer("❌ <b>Ошибка при добавлении домена.</b>", parse_mode="HTML")
 
 @dp.message_handler(commands=['removedomain'])
 async def cmd_removedomain(message: types.Message):
-    args = parse_args(message.text)
+    args = message.get_args().strip()
     if not args:
-        await message.answer("Использование: /removedomain <домен>")
+        await message.answer("✏️ <b>Использование:</b> /removedomain <домен>", parse_mode="HTML")
         return
     remove_domain(args)
-    await message.answer(f"Домен {args} удалён из отслеживаемых.")
+    await message.answer(f"🗑️ <b>Домен <code>{args}</code> удалён из отслеживаемых.</b>", parse_mode="HTML")
 
 @dp.message_handler(commands=['cleardomains'])
 async def cmd_cleardomains(message: types.Message):
     clear_domains()
-    await message.answer("Все домены удалены из отслеживания!")
+    await message.answer("🧹 <b>Все домены удалены из отслеживания!</b>", parse_mode="HTML")
 
 @dp.message_handler(commands=['alerts'])
 async def cmd_alerts(message: types.Message):
-    args = parse_args(message.text).lower()
+    args = message.get_args().strip().lower()
     if args == "on":
         set_setting("alerts_on", "1")
-        await message.answer("Алерты включены.")
+        await message.answer("🔔 <b>Алерты включены.</b>", parse_mode="HTML")
     elif args == "off":
         set_setting("alerts_on", "0")
-        await message.answer("Алерты отключены.")
+        await message.answer("🔕 <b>Алерты отключены.</b>", parse_mode="HTML")
     else:
-        await message.answer("Использование: /alerts on|off")
+        await message.answer("✏️ <b>Использование:</b> /alerts on|off", parse_mode="HTML")
 
 @dp.message_handler(commands=['summary'])
 async def cmd_summary(message: types.Message):
     send_summary()
-    await message.answer("Сводка отправлена!")
+    await message.answer("📤 <b>Сводка отправлена!</b>", parse_mode="HTML")
 
 @dp.message_handler(commands=['status'])
 async def cmd_status(message: types.Message):
     alerts_on = get_setting("alerts_on", "1")
     domains = get_domains()
     msg = (
-        f"Статус бота:\n"
-        f" • Алерты: {'ВКЛ' if alerts_on == '1' else 'ВЫКЛ'}\n"
-        f" • Кол-во отслеживаемых доменов: {len(domains)}\n"
-        f" • Интервал сводки: {SUMMARY_INTERVAL}\n"
+        f"🛡 <b>Статус бота:</b>\n"
+        f" • Алерты: <b>{'ВКЛ' if alerts_on == '1' else 'ВЫКЛ'}</b>\n"
+        f" • Кол-во отслеживаемых доменов: <b>{len(domains)}</b>\n"
+        f" • Интервал сводки: <b>{SUMMARY_INTERVAL}</b>\n"
     )
-    await message.answer(msg)
+    await message.answer(msg, parse_mode="HTML")
 
+# --- Запуск потоков и бота ---
 def main():
     init_db()
     threading.Thread(target=tail_log, daemon=True).start()
