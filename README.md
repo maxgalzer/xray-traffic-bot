@@ -122,3 +122,21 @@ bash <(curl -Ls https://raw.githubusercontent.com/maxgalzer/xray-traffic-bot/mai
 - Зависимости: `aiogram==2.25.2`, `python-dotenv`
 - Все логи пишутся только в stdout и в Telegram
 ---
+## ❌ Удаление Telegram-бота мониторинга 3x-ui
+
+Если хотите полностью удалить бота и все его файлы, выполните:
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/maxgalzer/xray-traffic-bot/main/uninstall.sh)
+```
+
+Что делает этот скрипт:
+
+- Останавливает и отключает systemd-сервис бота
+- Удаляет systemd unit-файл
+- Удаляет все файлы и настройки бота из `/opt/xui-tg-bot`
+
+> **Примечание:**  
+> Если устанавливали дополнительные Python-библиотеки только для этого бота, их можно удалить вручную командой  
+> `pip3 uninstall -r /opt/xui-tg-bot/requirements.txt`  
+> (после удаления папки скрипт не найдёт этот файл — используйте перед удалением папки, если нужно).
